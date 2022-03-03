@@ -356,3 +356,102 @@ Y.lmmsurGaucopest.nlm=function(theta,m,Data,lmmcor,surlmmcor,N)            #func
                colMeans(ECPmatrix),colMeans(CPmatrix),loglik,j,datasetid)
   return(results)
 }
+
+
+#Dynamic prediction for survival process on simulated data
+simpredSurGaucop=function(beta1,beta2,rho1,rho2,r,sigma,data,dynati,predinterv,acc)      #Prediction based on multivariate Gaussian copula joint model
+{
+  timepoint=data$s
+  ni=length(timepoint)
+  R21=rep(rho1,ni)
+  R12=t(R21)
+  R11=1
+  R22=matrix(c(rep(c(1,rep(rho2,ni)),(ni-1)),1),ncol=ni)
+  R=rbind(cbind(R11,R12),cbind(R21,R22))
+  Xi1=matrix(c(rep(1,ni),timepoint,timepoint*data$treat,
+               data$gender,as.numeric(data$age==1),as.numeric(data$age==2)),ncol=6)
+  Xi2=c(1,unique(data$treat),unique(data$gender),unique(as.numeric(data$age==1)),unique(as.numeric(data$age==2)))
+  if(dynati>=unique(data$obsti))  
+  {
+    t=seq(unique(data$obsti),predinterv,by=acc)
+    dimyi=sum(timepoint<=unique(data$obsti))
+  }
+  if(dynati<unique(data$obsti))  
+  {
+    t=seq(dynati,predinterv,by=acc)
+    dimyi=sum(timepoint<=dynati)
+  }
+  Ryi=R[-1,-1][1:dimyi,1:dimyi]
+  Si=1-pweibull(t,shape=r,scale=exp(-t(Xi2)%*%beta2/r))
+  Zyi=c(data$resp-Xi1%*%beta1)[1:dimyi]/sigma
+  mutconi=as.numeric(t(R[1,-1][1:dimyi])%*%solve(Ryi)%*%Zyi)
+  sigmatconi=as.numeric(sqrt(1-t(R[1,-1][1:dimyi])%*%solve(Ryi)%*%R[1,-1][1:dimyi]))
+  predi=pnorm((qnorm(Si)+mutconi)/sigmatconi)/pnorm((qnorm(Si[1])+mutconi)/sigmatconi)
+  results=list(t,Si/Si[1],predi,dimyi)
+  return(results)
+}
+
+
+
+simpredSurtcop=function(beta1,beta2,rho1,rho2,r,sigma,data,dynati,predinterv,fred,acc)       #Prediction based on multivariate t copula joint model
+{
+  timepoint=data$s
+  ni=length(timepoint)
+  R21=rep(rho1,ni)
+  R12=t(R21)
+  R11=1
+  R22=matrix(c(rep(c(1,rep(rho2,ni)),(ni-1)),1),ncol=ni)
+  R=rbind(cbind(R11,R12),cbind(R21,R22))
+  Xi1=matrix(c(rep(1,ni),timepoint,timepoint*data$treat,
+               data$gender,as.numeric(data$age==1),as.numeric(data$age==2)),ncol=6)
+  Xi2=c(1,unique(data$treat),unique(data$gender),unique(as.numeric(data$age==1)),unique(as.numeric(data$age==2)))
+  if(dynati>=unique(data$obsti))  
+  {
+    t=seq(unique(data$obsti),predinterv,by=acc)
+    dimyi=sum(timepoint<=unique(data$obsti))
+  }
+  if(dynati<unique(data$obsti))  
+  {
+    t=seq(dynati,predinterv,by=acc)
+    dimyi=sum(timepoint<=dynati)
+  }
+  Ryi=R[-1,-1][1:dimyi,1:dimyi]
+  Rtyi=matrix(R[1,-1][1:dimyi],nrow=1)
+  Ryti=matrix(R[-1,1][1:dimyi],ncol=1)
+  Si=1-pweibull(t,shape=r,scale=exp(-t(Xi2)%*%beta2/r))
+  Wyi=c(qt(pnorm((data$resp-Xi1%*%beta1)[1:dimyi]/sigma),df=fred))
+  fredtconi=fred+dimyi
+  mutconi=as.numeric(Rtyi%*%solve(Ryi)%*%Wyi)
+  sigmatconi=as.numeric(sqrt((fred+t(Wyi)%*%solve(Ryi)%*%Wyi)*(1-Rtyi%*%solve(Ryi)%*%Ryti)/(fred+dimyi)))
+  predi=pt((qt(Si,df=fred)+mutconi)/sigmatconi,df=fredtconi)/pt((qt(Si[1],df=fred)+mutconi)/sigmatconi,df=fredtconi)
+  results=list(t,predi,dimyi)
+  return(results)
+}
+
+
+#Claculate the absolute different between the true resudial life time and the estimated residual life time
+meanresditi=function(Data,beta1,beta2,rho1,rho2,r,sigma,dynati,predinterv,acc,n,cop,fred)
+{
+  estleft=0
+  truleft=0
+  j=0
+  i=1
+  while(i<=n)
+  { 
+    Datai=Data[Data$subj==i,]
+    s=Datai$s
+    if(max(s)>=dynati)
+    { 
+      j=j+1
+    if(cop=="nocop")   estleft[j]=sum(simpredSurGaucop(beta1=beta1,beta2=beta2,rho1=rho1,rho2=rho2,r=r,sigma=sigma,      #for survival sub-model alone
+                                                         data=Datai,dynati=dynati,predinterv=predinterv,acc=acc)[[2]]*acc)
+    if(cop=="Gaucop")   estleft[j]=sum(simpredSurGaucop(beta1=beta1,beta2=beta2,rho1=rho1,rho2=rho2,r=r,sigma=sigma,      #for Gaussian joint model
+                                              data=Datai,dynati=dynati,predinterv=predinterv,acc=acc)[[3]]*acc)
+    if(cop=="tcop")   estleft[j]=sum(simpredSurtcop(beta1=beta1,beta2=beta2,rho1=rho1,rho2=rho2,r=r,sigma=sigma,
+                                              data=Datai,dynati=dynati,predinterv=predinterv,fred=fred,acc=acc)[[2]]*acc) ##for t joint model
+    truleft[j]=unique(Datai$surti)-dynati
+    }
+    i=i+1
+  }
+  return(abs(estleft-truleft))
+}
